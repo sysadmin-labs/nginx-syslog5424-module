@@ -1,0 +1,38 @@
+name: Syslog
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  schedule:
+    # Monday morning, so a new nginx release that breaks the module shows
+    # up here and not in somebody's build
+    - cron: '59 7 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  syslog:
+    name: the datagram against RFC 5424
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # The suite in t/ sees the response, not the datagram, and the datagram
+    # is the whole product of this module.  Here a receiver sits on a UDP
+    # port and every field of every line is held against the grammar.
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: ./.github/actions/setup
+        with:
+          test-nginx: 'false'
+
+      - name: Build nginx
+        run: |
+          . .github/versions.env
+          ci/build.sh "$NGINX_VERSION" "$HOME/nginx"
+
+      - name: Catch the datagrams and check every field
+        run: ci/syslog.sh "$HOME/nginx/sbin/nginx"
