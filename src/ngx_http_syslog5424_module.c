@@ -95,11 +95,9 @@ static ngx_str_t  ngx_http_syslog5424_nil = ngx_string("-");
 
 
 /*
- * RFC 5424 says a HOSTNAME, APP-NAME or MSGID is printable ASCII without
- * spaces.  A value that breaks that rule would split the line into fields
- * the receiver never expected, so it is replaced by the NIL value rather
- * than sent: a log line that lies about its own shape is worse than one
- * that says it does not know.
+ * RFC 5424 requires HOSTNAME, APP-NAME and MSGID to be printable ASCII
+ * without spaces.  A value breaking that rule would shift every field
+ * behind it, so it is replaced by the NIL value.
  */
 static ngx_int_t
 ngx_http_syslog5424_printable(ngx_str_t *s)
@@ -173,8 +171,8 @@ ngx_http_syslog5424_handler(ngx_http_request_t *r)
         /*
          * <PRI>1 TIMESTAMP HOSTNAME APP-NAME PROCID MSGID SD MSG
          *
-         * The timestamp is the one nginx already keeps for $time_iso8601,
-         * so the line costs no call to the clock.
+         * The timestamp is the cached one behind $time_iso8601, so the
+         * line costs no call to the clock.
          */
         len = sizeof("<255>1 ") - 1
               + ngx_cached_http_log_iso8601.len + 1
@@ -299,11 +297,10 @@ ngx_http_syslog5424(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
     }
 
     /*
-     * The destination is parsed by nginx itself, so "syslog:server=...",
-     * facility, severity and tag mean exactly what they mean in
-     * access_log and error_log, and the socket is managed by the same code
-     * that manages theirs.  The tag becomes APP-NAME, which is what it is
-     * in RFC 5424 terms.
+     * The destination is parsed by ngx_syslog_process_conf(), so
+     * "syslog:server=...", facility, severity and tag mean what they mean
+     * in access_log, and the socket is handled by the same code.  The tag
+     * is the RFC 5424 APP-NAME.
      */
     if (ngx_syslog_process_conf(cf, target->peer) != NGX_CONF_OK) {
         return NGX_CONF_ERROR;

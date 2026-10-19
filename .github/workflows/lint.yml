@@ -25,9 +25,8 @@ jobs:
       - name: Make sure shellcheck is there
         run: |
           # The runner image ships shellcheck, so there is usually nothing
-          # to do.  If that ever changes, the install goes through the same
-          # bounded wrapper the build environment uses -- a stalled mirror
-          # must not hold this job either.
+          # to do.  If that changes, the install goes through the same
+          # bounded wrapper the build jobs use.
           if ! command -v shellcheck > /dev/null 2>&1; then
             ci/apt-get.sh update -qq
             ci/apt-get.sh install -y --no-install-recommends shellcheck

@@ -2,10 +2,9 @@
 #
 # Catch what the module sends and check it against RFC 5424.
 #
-# A test suite can see the response but not the datagram, and the datagram
-# is the whole product of this module.  So a small receiver sits on a UDP
-# port, nginx is pointed at it, and every field of every line that arrives
-# is held against the grammar:
+# t/ sees the response, not the datagram, and the datagram is what this
+# module produces.  A receiver on a UDP port collects what arrives and every
+# field is matched against
 #
 #     <PRI>1 TIMESTAMP HOSTNAME APP-NAME PROCID MSGID SD MSG
 #
@@ -83,8 +82,8 @@ use strict;
 use warnings;
 use IO::Socket::INET;
 
-# Everything that arrives within the window is written out line by line.
-# The window ends on its own so the script can never hang a workflow.
+# Everything arriving within the window is written out line by line; the
+# window ends on its own so the script cannot hang a workflow.
 
 my ($port, $seconds) = @ARGV;
 
@@ -107,9 +106,8 @@ while (time < $end) {
 PERL
 
 cleanup() {
-	# every line survives a failure of its own: this runs from an EXIT
-	# trap under set -e, where a failed test aborts the function and
-	# makes its status the status of the whole script
+	# runs from an EXIT trap under set -e, where a failing line would
+	# abort the function and become the exit status of the script
 	if [ -f "$WORK/logs/nginx.pid" ]; then
 		kill -QUIT "$(cat "$WORK/logs/nginx.pid")" 2>/dev/null || true
 	fi
@@ -136,14 +134,14 @@ sleep 3
 kill "$rpid" 2>/dev/null
 wait "$rpid" 2>/dev/null || true
 
-echo "--- what arrived ---"
+echo "== datagrams received"
 sed 's/^/  /' "$WORK/caught.txt"
 
 lines=$(grep -c . "$WORK/caught.txt" || true)
 [ "$lines" -eq 3 ] ||
 	note "expected three datagrams, got $lines (the \"off\" location must send nothing)"
 
-echo "--- the plain line ---"
+echo "== defaults only"
 plain=$(grep ' plain ' "$WORK/caught.txt" || true)
 case $plain in
 "<190>1 "*) echo "  priority 190, local7.info as nginx defaults it" ;;
@@ -152,17 +150,17 @@ esac
 echo "$plain" | grep -qE '^<190>1 [0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}[+-][0-9]{2}:[0-9]{2} [^ ]+ nginx [0-9]+ - - plain 200$' ||
 	note "the plain line does not match the grammar: $plain"
 
-echo "--- the line with everything set ---"
+echo "== all fields set"
 full=$(grep ' full ' "$WORK/caught.txt" || true)
 echo "$full" | grep -qE '^<141>1 [^ ]+ [^ ]+ myapp [0-9]+ access \[probe@32473 status="200" uri="/full"\] full /full\?a=b$' ||
 	note "the full line does not match the grammar: $full"
 
-echo "--- a msgid that is not printable ASCII becomes the NIL value ---"
+echo "== msgid that is not printable ASCII becomes NIL"
 bad=$(grep ' badid' "$WORK/caught.txt" || true)
 echo "$bad" | grep -qE ' - - badid$' ||
 	note "a msgid with a space was passed through: $bad"
 
-echo "--- the error log ---"
+echo "== error log"
 if grep -qE '\[(alert|emerg)\]' "$WORK/logs/error.log"; then
 	note "alert or emerg in the error log"
 	grep -E '\[(alert|emerg)\]' "$WORK/logs/error.log" | head -3 >&2

@@ -2,13 +2,10 @@
 #
 # Reload nginx a number of times in a row and look for what a reload leaks.
 #
-# Every reload builds a new cycle: a fresh configuration pool, fresh
-# workers, re-opened listening sockets.  The old one has to go away.  A
-# module that allocates or opens something per cycle and never gives it
-# back is invisible in normal use -- nothing fails, nothing is logged, the
-# process simply grows by one cycle's worth every time somebody runs
-# "nginx -s reload", for the life of the server.  A test suite never sees
-# it, because a suite starts nginx once.
+# Every reload builds a new cycle: a new configuration pool, new workers,
+# re-opened listening sockets.  Whatever a module allocates or opens per
+# cycle and never releases grows the process on every "nginx -s reload" and
+# is invisible to a test suite, which starts nginx once.
 #
 # usage: ci/reload.sh <nginx binary>
 #
@@ -27,34 +24,28 @@
 #     RELOAD_EXPECT  the body the probe below has to return
 #     reload_probe() prints what the server answered
 #
-# WHAT IS ASSERTED, and why each one is shaped the way it is:
+# Asserted after every reload:
 #
-#   The module still answers after every reload.  Portable, needs nothing
-#   from the system, and it is the oracle that catches a module whose
-#   per-cycle state is gone or stale after the handover.
+#   The module still answers.  Catches per-cycle state that is gone or
+#   stale after the handover.
 #
-#   The worker generation drains back to what the configuration asks for.
-#   A worker that outlives its cycle IS the leak, in process form: the
-#   server ends up carrying one worker per reload it has ever served.
+#   The worker generation drains back to the configured count.  A worker
+#   that outlives its cycle is the leak in process form: the server ends up
+#   carrying one worker per reload it has served.
 #
 #   The master's descriptor count does not move.  A listening socket or a
-#   channel descriptor kept from the previous cycle is deterministic and
-#   countable, which makes it the sharp oracle; the worker-side view cannot
-#   see it, because a worker only ever knows the cycle it was forked into.
-#   Needs /proc, so it is skipped VISIBLY where there is none, never
-#   silently.
+#   channel descriptor kept from the previous cycle is countable, and a
+#   worker cannot see it, since it only knows the cycle it was forked into.
+#   Needs /proc and is skipped with a message where there is none.
 #
-#   There is deliberately NO check on the master's resident size.  Measured
-#   here, a healthy series grows the master by about twenty-five pages per
-#   reload -- the allocator keeping what it has freed -- while a leaked
-#   cycle pool is a handful of pages.  Any band wide enough not to flap is
-#   already wider than the thing it would have to catch, so such a check
-#   could never fail for the right reason.  The descriptor count above is
-#   the sharp oracle and it needs no band at all.
+#   No worker died by signal.  A crashed and respawned worker looks like a
+#   reloaded one from the outside; the error log separates the two.
 #
-#   No worker died by signal.  A crashed and respawned worker looks exactly
-#   like a reloaded one from the outside, so the error log is what tells
-#   the two apart.
+# The master's resident size is not checked.  Measured here, a healthy
+# series grows the master by about twenty-five pages per reload, the
+# allocator keeping what it has freed, while a leaked cycle pool is a
+# handful of pages: a band wide enough not to flap would be wider than
+# what it has to catch.
 
 set -eu
 
@@ -143,14 +134,13 @@ stop() {
 }
 trap stop EXIT
 
-# The set of WORKER pids, sorted, as one line.  Used to tell a finished
-# handover from one still in flight: while the old generation drains, both
-# sets are present and every count taken then is noise.
+# The set of worker pids, sorted, on one line.  Tells a finished handover
+# from one still in flight: while the old generation drains both sets are
+# present and any count taken then is noise.
 #
-# Matched on the process title rather than simply taken as "every child of
-# the master": a module that asks for a cache starts a cache manager and a
-# cache loader, and those are children too.  Counting them made this wait
-# for a number of workers that could never be reached.
+# Matched on the process title and not on "every child of the master": a
+# module that asks for a cache starts a cache manager and a cache loader,
+# which are children too.
 workers() {
 	pgrep -P "$MASTER" -f 'worker process' 2> /dev/null | sort | tr '\n' ' '
 }

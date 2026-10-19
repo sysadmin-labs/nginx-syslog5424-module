@@ -26,14 +26,13 @@
 [lint-badge]: https://github.com/sysadmin-labs/nginx-syslog5424-module/actions/workflows/lint.yml/badge.svg
 [lint-link]: https://github.com/sysadmin-labs/nginx-syslog5424-module/actions/workflows/lint.yml
 
-Access logging to a syslog server in the format of **RFC 5424**, the one
-from 2009, instead of the BSD format of RFC 3164 that nginx speaks.
+Access logging to a syslog server in the RFC 5424 format of 2009 instead of
+the BSD format of RFC 3164 that nginx speaks.
 
-nginx can log to syslog, but only in the old format: a priority, a month,
-a day, a clock without a year, a hostname and a tag.  RFC 5424 adds what a
-modern collector wants -- a version, an RFC 3339 timestamp with time zone,
-an explicit process id, a message id and structured data -- and that is
-what this module sends.
+nginx logs to syslog in the old format only: a priority, a month, a day, a
+clock without a year, a hostname and a tag.  RFC 5424 adds what a current
+collector expects, a version, an RFC 3339 timestamp with time zone, an
+explicit process id, a message id and structured data.
 
 ## Synopsis
 
@@ -68,48 +67,48 @@ A line on the wire then reads
 **syntax:** `syslog5424 off`
 **context:** `http`, `server`, `location`, `if in location`
 
-The first parameter is the destination, parsed by nginx itself, so
-`server=`, `facility=`, `severity=`, `tag=` and `nohostname` mean exactly
-what they mean in `access_log` and `error_log`.  The `tag` becomes the
-RFC 5424 **APP-NAME**.
+The first parameter is the destination and is parsed by nginx itself, so
+`server=`, `facility=`, `severity=`, `tag=` and `nohostname` mean what they
+mean in `access_log` and `error_log`.  The tag becomes the RFC 5424
+APP-NAME.
 
-`msgid=`, `sd=` and `message=` take variables.  `message=` is required;
+`msgid=`, `sd=` and `message=` take variables.  `message=` is required,
 `msgid=` and `sd=` default to the NIL value `-`.  A `msgid` that is not
-printable ASCII without spaces is replaced by `-` rather than sent, because
-a value with a space in it would move every field behind it.
+printable ASCII without spaces is replaced by `-`, since a value containing
+a space would shift every field behind it.
 
-Several targets may be given in one place: each is sent its own datagram.
-`syslog5424 off` silences the targets inherited from an enclosing block.
+Several targets may be configured in one place; each is sent its own
+datagram.  `syslog5424 off` silences the targets inherited from an
+enclosing block.
 
-**Quoting.** A parameter whose value carries a space has to be quoted as a
-whole, the way nginx quotes: `'message=$remote_addr $status'`, not
+A parameter whose value contains a space has to be quoted as a whole, the
+way nginx quotes: `'message=$remote_addr $status'`, not
 `message='$remote_addr $status'`.
 
-## What it does not do yet
+## Limitations
 
-* TCP (RFC 6587) and TLS (RFC 5425) transports.  nginx's own syslog code,
-  which this module uses for the socket, speaks UDP and unix datagram
-  sockets.
-* The UTF-8 byte order mark that RFC 5424 allows in front of the message.
-* `error_log` in the new format -- the error log is nginx's own and a
-  module cannot reach it.
+* No TCP (RFC 6587) and no TLS (RFC 5425) transport.  The socket is nginx's
+  own syslog code, which speaks UDP and unix datagram sockets.
+* No UTF-8 byte order mark in front of the message.
+* No `error_log` in the new format: the error log belongs to nginx and is
+  out of reach of a module.
 
-## Building
+## Installation
 
 ```sh
 ./configure --add-module=/path/to/nginx-syslog5424-module
 ```
 
-or, as a loadable module,
+or as a loadable module
 
 ```sh
 ./configure --add-dynamic-module=/path/to/nginx-syslog5424-module
 ```
 
-and then `load_module modules/ngx_http_syslog5424_module.so;` in the main
+with `load_module modules/ngx_http_syslog5424_module.so;` in the main
 context.
 
-## Testing
+## Tests
 
 ```sh
 ci/build.sh 1.30.5 /tmp/nginx-test
@@ -119,8 +118,8 @@ ci/reload.sh /tmp/nginx-test/sbin/nginx
 ```
 
 `ci/syslog.sh` binds a UDP port, drives a few requests through nginx and
-holds every field of every datagram against the grammar.
+matches every field of every datagram against the grammar.
 
 ## License
 
-BSD 2-Clause.  See [LICENSE](LICENSE).
+BSD 2-Clause, see [LICENSE](LICENSE).

@@ -5,13 +5,11 @@
 #     .github/scripts/pins.sh >> "$GITHUB_OUTPUT"
 #
 #     nginx=["1.28.3","1.30.5",...]   for a strategy.matrix through fromJSON
-#     version=1.31.6                  for the jobs that build one release
+#     version=1.30.5                  for the jobs that build one release
 #
-# A matrix is read before any step of its own job runs, so the list cannot be
-# produced inside that job; it has to arrive as the output of an earlier one.
-# That is this script's whole reason to exist.  Everywhere else a step simply
-# sources .github/versions.env, which keeps one data file and no second way
-# of reading it.
+# A matrix is read before any step of its own job runs, so the list cannot
+# be produced inside that job; it has to arrive as the output of an earlier
+# one.  Everywhere else a step sources .github/versions.env directly.
 
 set -eu
 
@@ -23,8 +21,8 @@ ENVFILE=$(dirname "$0")/../versions.env
 }
 
 # The file is written to be sourced, so a value holding more than one word
-# carries quotes.  Sourcing it here would mean running it, so the two values
-# are read out instead and the quotes stripped.
+# carries quotes.  Sourcing it here would mean running it, so the values are
+# read out and the quotes stripped.
 versions=$(sed -n 's/^NGINX_VERSIONS=//p' "$ENVFILE" | tr -d '"')
 version=$(sed -n 's/^NGINX_VERSION=//p' "$ENVFILE" | tr -d '"')
 
