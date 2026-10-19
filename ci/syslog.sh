@@ -107,9 +107,15 @@ while (time < $end) {
 PERL
 
 cleanup() {
-	[ -f "$WORK/logs/nginx.pid" ] &&
-		kill -QUIT "$(cat "$WORK/logs/nginx.pid")" 2>/dev/null
-	[ -n "${rpid:-}" ] && kill "$rpid" 2>/dev/null
+	# every line survives a failure of its own: this runs from an EXIT
+	# trap under set -e, where a failed test aborts the function and
+	# makes its status the status of the whole script
+	if [ -f "$WORK/logs/nginx.pid" ]; then
+		kill -QUIT "$(cat "$WORK/logs/nginx.pid")" 2>/dev/null || true
+	fi
+	if [ -n "${rpid:-}" ]; then
+		kill "$rpid" 2>/dev/null || true
+	fi
 	sleep 1
 }
 trap cleanup EXIT INT TERM
