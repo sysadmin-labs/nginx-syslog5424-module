@@ -22,7 +22,8 @@ jobs:
     env:
       # nginx runs the little programs its configure compiles.  With leak
       # detection on, each of them reports at exit and returns non-zero,
-      # and every feature probe comes out "found but is not working".
+      # and every feature probe comes out "found but is not working".  So
+      # leaks are valgrind's job here, not this job's.
       ASAN_OPTIONS: detect_leaks=0
       # The suppression file names one finding in nginx's own startup
       # path and says why; see ci/ubsan.suppress.  The path has to be
@@ -49,9 +50,18 @@ jobs:
             TEST_NGINX_BINARY="$HOME/nginx/sbin/nginx" \
             prove -r t/ 2>&1 | tee sanitizer.log
 
+      - name: Run the driver under the sanitizers
+        run: |
+          set -o pipefail
+          # t/ only reaches the configuration parser.  This is the part that
+          # walks the module at run time, which is what the sanitizers are
+          # here for.
+          ASAN_OPTIONS="$ASAN_OPTIONS:abort_on_error=0" \
+            ci/syslog.sh "$HOME/nginx/sbin/nginx" 2>&1 | tee -a sanitizer.log
+
       - name: No findings allowed
         run: |
-          if grep -nE "AddressSanitizer|runtime error:|LeakSanitizer" sanitizer.log; then
+          if grep -nE "AddressSanitizer|runtime error:" sanitizer.log; then
             echo "a sanitizer reported the lines above" >&2
             exit 1
           fi

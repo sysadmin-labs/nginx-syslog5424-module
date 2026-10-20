@@ -44,3 +44,8 @@ jobs:
             # from nginx's own syslog code, which talks to a different
             # kernel on this system
             ci/syslog.sh "$HOME/nginx/sbin/nginx"
+            # www/nginx ships this module as a loadable object, so that is
+            # the build the package is made of and it is built here too
+            ci/build.sh "$NGINX_VERSION" "$HOME/nginx-dyn" dynamic
+            SYSLOG_LOAD_MODULE=$HOME/nginx-dyn/modules/ngx_http_syslog5424_module.so \
+              ci/syslog.sh "$HOME/nginx-dyn/sbin/nginx"

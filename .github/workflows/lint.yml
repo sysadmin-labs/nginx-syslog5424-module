@@ -38,6 +38,8 @@ jobs:
           # the nginx addon "config" files are fragments that nginx's own
           # configure sources, not standalone scripts, so they stay out
           files=$(find ci t -name '*.sh' 2>/dev/null | sort)
+          # reload.conf is shell too: reload.sh sources it
+          files="$files ci/reload.conf"
           if [ -z "$files" ]; then
             echo "no scripts to check"
             exit 0

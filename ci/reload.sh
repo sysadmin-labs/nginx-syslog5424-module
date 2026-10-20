@@ -248,4 +248,5 @@ if grep -qE '\[alert\]|\[crit\]|\[emerg\]' "$WORK/logs/error.log" 2> /dev/null; 
 	fail=1
 fi
 
-[ "$fail" -eq 0 ]
+[ "$fail" -eq 0 ] || { echo "ci/reload.sh: failed" >&2; exit 1; }
+echo "ci/reload.sh: ok"

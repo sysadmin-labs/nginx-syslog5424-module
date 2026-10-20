@@ -70,7 +70,7 @@ A line on the wire then reads
 The first parameter is the destination and is parsed by nginx itself, so
 `server=`, `facility=`, `severity=`, `tag=` and `nohostname` mean what they
 mean in `access_log` and `error_log`.  The tag becomes the RFC 5424
-APP-NAME.
+APP-NAME, and `nohostname` sends the NIL value in place of the hostname.
 
 `msgid=`, `sd=` and `message=` take variables.  `message=` is required,
 `msgid=` and `sd=` default to the NIL value `-`.  A `msgid` that is not
@@ -85,6 +85,18 @@ A parameter whose value contains a space has to be quoted as a whole, the
 way nginx quotes: `'message=$remote_addr $status'`, not
 `message='$remote_addr $status'`.
 
+**Client bytes.** A variable carries whatever the client sent.  Control
+characters and the backslash are written as `\xHH` in `sd=` and `message=`,
+so a line feed from a request cannot end the record and have the bytes
+behind it read as a second, forged entry.  What a variable inside an SD
+PARAM-VALUE must not contain is `"`, `]` and `\`: those three carry meaning
+inside structured data (RFC 5424 section 6.3.3) and the module leaves them
+alone, since it cannot tell them from the element the configuration writes.
+
+**Length.** A line is cut at 2048 bytes, the size RFC 5424 section 6.1 asks
+a receiver to accept.  Structured data that does not fit is sent as the NIL
+value rather than cut in half; a message is cut at the end.
+
 ## Limitations
 
 * No TCP (RFC 6587) and no TLS (RFC 5425) transport.  The socket is nginx's
@@ -92,6 +104,10 @@ way nginx quotes: `'message=$remote_addr $status'`, not
 * No UTF-8 byte order mark in front of the message.
 * No `error_log` in the new format: the error log belongs to nginx and is
   out of reach of a module.
+
+On FreeBSD, `syslogd` starts with `-s` by default and binds no UDP socket,
+so a destination on the local machine needs `syslogd_flags` without it, or
+a collector that listens itself.
 
 ## Installation
 

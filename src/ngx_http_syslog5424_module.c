@@ -23,6 +23,14 @@
 #include <ngx_syslog.h>
 
 
+/*
+ * RFC 5424 section 6.1: a receiver has to accept 480 octets and should
+ * accept 2048.  Everything beyond that is cut off here rather than handed
+ * to the kernel, which is what nginx does with its own syslog lines.
+ */
+#define NGX_HTTP_SYSLOG5424_MAX_LINE  2048
+
+
 typedef struct {
     ngx_syslog_peer_t         *peer;      /* transport, nginx's own */
     ngx_http_complex_value_t  *msgid;     /* MSGID, "-" when absent */
@@ -37,7 +45,13 @@ typedef struct {
 } ngx_http_syslog5424_conf_t;
 
 
+typedef struct {
+    ngx_flag_t    used;                   /* a target exists somewhere */
+} ngx_http_syslog5424_main_conf_t;
+
+
 static ngx_int_t ngx_http_syslog5424_handler(ngx_http_request_t *r);
+static void *ngx_http_syslog5424_create_main_conf(ngx_conf_t *cf);
 static void *ngx_http_syslog5424_create_loc_conf(ngx_conf_t *cf);
 static char *ngx_http_syslog5424_merge_loc_conf(ngx_conf_t *cf, void *parent,
     void *child);
@@ -64,7 +78,7 @@ static ngx_http_module_t  ngx_http_syslog5424_module_ctx = {
     NULL,                                  /* preconfiguration */
     ngx_http_syslog5424_init,              /* postconfiguration */
 
-    NULL,                                  /* create main configuration */
+    ngx_http_syslog5424_create_main_conf,  /* create main configuration */
     NULL,                                  /* init main configuration */
 
     NULL,                                  /* create server configuration */
@@ -118,12 +132,72 @@ ngx_http_syslog5424_printable(ngx_str_t *s)
 }
 
 
+/*
+ * Everything that reaches SD and MSG comes from a variable, so it carries
+ * whatever the client sent.  A line feed in there ends the record for every
+ * receiver that reads datagrams line by line, and the bytes behind it are
+ * then a second, forged entry with a priority and a hostname of the
+ * client's choosing.  Control characters and the backslash are written as
+ * \xHH, the way nginx writes them in an access log.
+ */
+static size_t
+ngx_http_syslog5424_escaped_len(ngx_str_t *s)
+{
+    size_t  i, n;
+
+    n = 0;
+
+    for (i = 0; i < s->len; i++) {
+        if (s->data[i] < 0x20 || s->data[i] == 0x7f || s->data[i] == '\\') {
+            n += 3;
+        }
+    }
+
+    return s->len + n;
+}
+
+
+static u_char *
+ngx_http_syslog5424_escape(u_char *dst, u_char *last, ngx_str_t *s)
+{
+    static u_char   hex[] = "0123456789ABCDEF";
+
+    size_t          i;
+    u_char          ch;
+
+    for (i = 0; i < s->len; i++) {
+        ch = s->data[i];
+
+        if (ch < 0x20 || ch == 0x7f || ch == '\\') {
+
+            if (last - dst < 4) {
+                break;
+            }
+
+            *dst++ = '\\';
+            *dst++ = 'x';
+            *dst++ = hex[ch >> 4];
+            *dst++ = hex[ch & 0x0f];
+            continue;
+        }
+
+        if (dst == last) {
+            break;
+        }
+
+        *dst++ = ch;
+    }
+
+    return dst;
+}
+
+
 static ngx_int_t
 ngx_http_syslog5424_handler(ngx_http_request_t *r)
 {
     size_t                         len;
-    u_char                        *line, *p;
-    ngx_str_t                      msgid, sd, msg;
+    u_char                        *line, *p, *last;
+    ngx_str_t                      msgid, sd, msg, host, tag;
     ngx_uint_t                     i, pri;
     ngx_http_syslog5424_conf_t    *scf;
     ngx_http_syslog5424_target_t  *target;
@@ -144,7 +218,7 @@ ngx_http_syslog5424_handler(ngx_http_request_t *r)
 
         if (target[i].msgid) {
             if (ngx_http_complex_value(r, target[i].msgid, &msgid) != NGX_OK) {
-                return NGX_ERROR;
+                continue;
             }
 
             if (!ngx_http_syslog5424_printable(&msgid)) {
@@ -154,7 +228,7 @@ ngx_http_syslog5424_handler(ngx_http_request_t *r)
 
         if (target[i].sd) {
             if (ngx_http_complex_value(r, target[i].sd, &sd) != NGX_OK) {
-                return NGX_ERROR;
+                continue;
             }
 
             if (sd.len == 0) {
@@ -164,8 +238,22 @@ ngx_http_syslog5424_handler(ngx_http_request_t *r)
 
         if (target[i].message) {
             if (ngx_http_complex_value(r, target[i].message, &msg) != NGX_OK) {
-                return NGX_ERROR;
+                continue;
             }
+        }
+
+        /* "nohostname" is nginx's own parameter and means a NIL HOSTNAME */
+        host = target[i].peer->nohostname
+                   ? ngx_http_syslog5424_nil : *target[i].peer->hostname;
+
+        if (!ngx_http_syslog5424_printable(&host)) {
+            host = ngx_http_syslog5424_nil;
+        }
+
+        tag = target[i].peer->tag;
+
+        if (!ngx_http_syslog5424_printable(&tag)) {
+            tag = ngx_http_syslog5424_nil;
         }
 
         /*
@@ -176,38 +264,61 @@ ngx_http_syslog5424_handler(ngx_http_request_t *r)
          */
         len = sizeof("<255>1 ") - 1
               + ngx_cached_http_log_iso8601.len + 1
-              + target[i].peer->hostname->len + 1
-              + target[i].peer->tag.len + 1
+              + host.len + 1
+              + tag.len + 1
               + NGX_INT_T_LEN + 1
               + msgid.len + 1
-              + sd.len + 1
-              + msg.len;
+              + ngx_http_syslog5424_escaped_len(&sd) + 1
+              + ngx_http_syslog5424_escaped_len(&msg);
+
+        if (len > NGX_HTTP_SYSLOG5424_MAX_LINE) {
+            len = NGX_HTTP_SYSLOG5424_MAX_LINE;
+        }
 
         line = ngx_pnalloc(r->pool, len);
         if (line == NULL) {
-            return NGX_ERROR;
+            return NGX_OK;
         }
+
+        last = line + len;
 
         pri = target[i].peer->facility * 8 + target[i].peer->severity;
 
-        p = ngx_sprintf(line, "<%ui>1 %V %V %V %P %V %V",
-                        pri,
-                        &ngx_cached_http_log_iso8601,
-                        target[i].peer->hostname,
-                        &target[i].peer->tag,
-                        ngx_pid,
-                        &msgid,
-                        &sd);
+        p = ngx_snprintf(line, len, "<%ui>1 %V %V %V %P %V ",
+                         pri,
+                         &ngx_cached_http_log_iso8601,
+                         &host,
+                         &tag,
+                         ngx_pid,
+                         &msgid);
 
-        if (msg.len) {
+        /*
+         * A structured data element cut in half is not structured data
+         * any more, so an SD that does not fit goes out as NIL and the
+         * message behind it keeps the room.
+         */
+        if (ngx_http_syslog5424_escaped_len(&sd) > (size_t) (last - p)) {
+            sd = ngx_http_syslog5424_nil;
+        }
+
+        p = ngx_http_syslog5424_escape(p, last, &sd);
+
+        if (msg.len && last - p > 1) {
             *p++ = ' ';
-            p = ngx_cpymem(p, msg.data, msg.len);
+            p = ngx_http_syslog5424_escape(p, last, &msg);
         }
 
         (void) ngx_syslog_send(target[i].peer, line, p - line);
     }
 
     return NGX_OK;
+}
+
+
+static void *
+ngx_http_syslog5424_create_main_conf(ngx_conf_t *cf)
+{
+    return ngx_pcalloc(cf->pool, sizeof(ngx_http_syslog5424_main_conf_t));
 }
 
 
@@ -250,6 +361,7 @@ ngx_http_syslog5424(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
 
     ngx_str_t                          *value;
     ngx_uint_t                          i;
+    ngx_http_syslog5424_main_conf_t    *smcf;
     ngx_http_syslog5424_target_t       *target;
     ngx_http_compile_complex_value_t    ccv;
 
@@ -262,10 +374,23 @@ ngx_http_syslog5424(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
             return NGX_CONF_ERROR;
         }
 
+        if (scf->targets != NULL) {
+            ngx_conf_log_error(NGX_LOG_EMERG, cf, 0,
+                               "\"syslog5424 off\" and a target cannot be "
+                               "used in the same block");
+            return NGX_CONF_ERROR;
+        }
+
         scf->off = 1;
-        scf->targets = NULL;
 
         return NGX_CONF_OK;
+    }
+
+    if (scf->off == 1) {
+        ngx_conf_log_error(NGX_LOG_EMERG, cf, 0,
+                           "\"syslog5424 off\" and a target cannot be used "
+                           "in the same block");
+        return NGX_CONF_ERROR;
     }
 
     if (ngx_strncmp(value[1].data, "syslog:", 7) != 0) {
@@ -395,6 +520,9 @@ ngx_http_syslog5424(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
         return NGX_CONF_ERROR;
     }
 
+    smcf = ngx_http_conf_get_module_main_conf(cf, ngx_http_syslog5424_module);
+    smcf->used = 1;
+
     return NGX_CONF_OK;
 }
 
@@ -402,8 +530,16 @@ ngx_http_syslog5424(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
 static ngx_int_t
 ngx_http_syslog5424_init(ngx_conf_t *cf)
 {
-    ngx_http_handler_pt        *h;
-    ngx_http_core_main_conf_t  *cmcf;
+    ngx_http_handler_pt              *h;
+    ngx_http_core_main_conf_t        *cmcf;
+    ngx_http_syslog5424_main_conf_t  *smcf;
+
+    smcf = ngx_http_conf_get_module_main_conf(cf, ngx_http_syslog5424_module);
+
+    /* no target anywhere, so no handler in the log phase of every request */
+    if (!smcf->used) {
+        return NGX_OK;
+    }
 
     cmcf = ngx_http_conf_get_module_main_conf(cf, ngx_http_core_module);
 

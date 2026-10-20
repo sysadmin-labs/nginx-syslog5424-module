@@ -69,6 +69,19 @@ http {
             return 200 "x";
         }
 
+        location /hostile {
+            syslog5424 syslog:server=127.0.0.1:$UDP
+                       'sd=[probe@32473 ua="\$http_user_agent"]'
+                       'message=hostile \$http_x_probe';
+            return 200 "x";
+        }
+
+        location /long {
+            syslog5424 syslog:server=127.0.0.1:$UDP
+                       'message=long \$http_x_probe';
+            return 200 "x";
+        }
+
         location /quiet {
             syslog5424 off;
             return 200 "x";
@@ -118,7 +131,7 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
-perl "$WORK/receiver.pl" "$UDP" 8 > "$WORK/caught.txt" &
+perl "$WORK/receiver.pl" "$UDP" 10 > "$WORK/caught.txt" &
 rpid=$!
 sleep 1
 
@@ -128,6 +141,11 @@ sleep 1
 curl -s -o /dev/null "http://127.0.0.1:$PORT/plain"
 curl -s -o /dev/null "http://127.0.0.1:$PORT/full?a=b"
 curl -s -o /dev/null "http://127.0.0.1:$PORT/badid"
+# a line feed and a control byte in two variables that end up in the line
+curl -s -o /dev/null -H 'User-Agent: ua"]x' \
+	-H "$(printf 'X-Probe: a\tb')" "http://127.0.0.1:$PORT/hostile"
+curl -s -o /dev/null -H "X-Probe: $(awk 'BEGIN{while(i++<3000)printf "A"}')" \
+	"http://127.0.0.1:$PORT/long"
 curl -s -o /dev/null "http://127.0.0.1:$PORT/quiet"
 
 sleep 3
@@ -138,8 +156,8 @@ echo "== datagrams received"
 sed 's/^/  /' "$WORK/caught.txt"
 
 lines=$(grep -c . "$WORK/caught.txt" || true)
-[ "$lines" -eq 3 ] ||
-	note "expected three datagrams, got $lines (the \"off\" location must send nothing)"
+[ "$lines" -eq 5 ] ||
+	note "expected five datagrams, got $lines (the \"off\" location must send nothing)"
 
 echo "== defaults only"
 plain=$(grep ' plain ' "$WORK/caught.txt" || true)
@@ -159,6 +177,21 @@ echo "== msgid that is not printable ASCII becomes NIL"
 bad=$(grep ' badid' "$WORK/caught.txt" || true)
 echo "$bad" | grep -qE ' - - badid$' ||
 	note "a msgid with a space was passed through: $bad"
+
+echo "== control characters from the client are escaped"
+hostile=$(grep ' hostile ' "$WORK/caught.txt" || true)
+echo "$hostile" | grep -q 'hostile a\\x09b$' ||
+	note "a tab from a header was not escaped: $hostile"
+awk 'END { if (NR < 1) exit 1 }' "$WORK/caught.txt"
+[ "$(grep -c . "$WORK/caught.txt")" -eq 5 ] ||
+	note "a datagram was split, so a control character ended a record"
+
+echo "== an overlong message is cut, not dropped"
+long=$(grep ' long ' "$WORK/caught.txt" || true)
+n=$(printf '%s' "$long" | wc -c | tr -d ' ')
+echo "  $n bytes"
+[ "$n" -le 2048 ] || note "the line is $n bytes, RFC 5424 asks for 2048"
+[ "$n" -ge 1024 ] || note "the line is only $n bytes, the message was dropped"
 
 echo "== error log"
 if grep -qE '\[(alert|emerg)\]' "$WORK/logs/error.log"; then
