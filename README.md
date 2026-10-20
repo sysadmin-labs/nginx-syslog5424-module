@@ -63,7 +63,7 @@ A line on the wire then reads
 
 ### `syslog5424`
 
-**syntax:** `syslog5424 syslog:server=<address>[,facility=][,severity=][,tag=] [msgid=<value>] [sd=<value>] message=<value>`
+**syntax:** `syslog5424 syslog:server=<address>[,facility=][,severity=][,tag=][,nohostname] [msgid=<value>] [sd=<value>] message=<value>`
 **syntax:** `syslog5424 off`
 **context:** `http`, `server`, `location`, `if in location`
 
@@ -73,25 +73,29 @@ mean in `access_log` and `error_log`.  The tag becomes the RFC 5424
 APP-NAME, and `nohostname` sends the NIL value in place of the hostname.
 
 `msgid=`, `sd=` and `message=` take variables.  `message=` is required,
-`msgid=` and `sd=` default to the NIL value `-`.  A `msgid` that is not
-printable ASCII without spaces is replaced by `-`, since a value containing
-a space would shift every field behind it.
+`msgid=` and `sd=` default to the NIL value `-`.  A hostname, tag or `msgid`
+that is not printable ASCII without spaces, or longer than RFC 5424 allows
+for that field (255, 48 and 32 octets), is replaced by `-`, since a value
+containing a space would shift every field behind it.
 
 Several targets may be configured in one place; each is sent its own
-datagram.  `syslog5424 off` silences the targets inherited from an
-enclosing block.
+datagram.  `syslog5424 off` silences the targets inherited from an enclosing
+block; a block that names a target of its own is not silenced by an `off`
+further out, and `off` next to a target in the same block is a configuration
+error.
 
 A parameter whose value contains a space has to be quoted as a whole, the
 way nginx quotes: `'message=$remote_addr $status'`, not
 `message='$remote_addr $status'`.
 
-**Client bytes.** A variable carries whatever the client sent.  Control
-characters and the backslash are written as `\xHH` in `sd=` and `message=`,
-so a line feed from a request cannot end the record and have the bytes
-behind it read as a second, forged entry.  What a variable inside an SD
-PARAM-VALUE must not contain is `"`, `]` and `\`: those three carry meaning
-inside structured data (RFC 5424 section 6.3.3) and the module leaves them
-alone, since it cannot tell them from the element the configuration writes.
+**Client bytes.** A variable carries whatever the client sent, so the value
+of a variable is escaped and the text around it is not.  In `sd=` the module
+knows which is which: the element, its brackets, names and quotes are taken
+as written, and every variable inside it is escaped the way RFC 5424 section
+6.3.3 asks for, `"` as `\"`, `]` as `\]` and `\` as `\\`.  Control
+characters are written as `\xHH` in both `sd=` and `message=`, so a line
+feed from a request cannot end the record and have the bytes behind it read
+as a second, forged entry.
 
 **Length.** A line is cut at 2048 bytes, the size RFC 5424 section 6.1 asks
 a receiver to accept.  Structured data that does not fit is sent as the NIL
@@ -109,7 +113,7 @@ On FreeBSD, `syslogd` starts with `-s` by default and binds no UDP socket,
 so a destination on the local machine needs `syslogd_flags` without it, or
 a collector that listens itself.
 
-## Installation
+## Building
 
 ```sh
 ./configure --add-module=/path/to/nginx-syslog5424-module
@@ -124,7 +128,7 @@ or as a loadable module
 with `load_module modules/ngx_http_syslog5424_module.so;` in the main
 context.
 
-## Tests
+## Testing
 
 ```sh
 ci/build.sh 1.30.5 /tmp/nginx-test

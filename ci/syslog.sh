@@ -178,10 +178,17 @@ bad=$(grep ' badid' "$WORK/caught.txt" || true)
 echo "$bad" | grep -qE ' - - badid$' ||
 	note "a msgid with a space was passed through: $bad"
 
-echo "== control characters from the client are escaped"
+echo "== what the client sends is escaped"
 hostile=$(grep ' hostile ' "$WORK/caught.txt" || true)
+echo "  $hostile"
 echo "$hostile" | grep -q 'hostile a\\x09b$' ||
 	note "a tab from a header was not escaped: $hostile"
+# the quote and the bracket carry meaning inside structured data, so a
+# client must not be able to leave the element with them
+echo "$hostile" | grep -q 'ua="ua\\"\\]x"\]' ||
+	note "a quote or a bracket from a header reached the element unescaped"
+echo "$hostile" | grep -qv 'probe@32473 ua="ua"]x"' ||
+	note "the client closed the structured data element"
 awk 'END { if (NR < 1) exit 1 }' "$WORK/caught.txt"
 [ "$(grep -c . "$WORK/caught.txt")" -eq 5 ] ||
 	note "a datagram was split, so a control character ended a record"
